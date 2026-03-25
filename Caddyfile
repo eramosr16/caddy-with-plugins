@@ -1,0 +1,42 @@
+{
+  # Coraza is a plugin directive, so we set explicit order.
+  order coraza_waf first
+
+  security {
+    authentication portal local_portal {
+      crypto default token lifetime 3600
+      crypto key sign-verify {env.JWT_SHARED_KEY}
+    }
+
+    authorization policy website_policy {
+      set auth url https://example.com/auth
+      allow roles authp/admin authp/user
+      crypto key verify {env.JWT_SHARED_KEY}
+
+      acl rule {
+        match role authp/user
+        allow stop log info
+      }
+
+    }
+  }
+}
+
+example.com {
+  route /auth* {
+    authenticate with local_portal
+  }
+
+  route {
+    coraza_waf {
+      load_owasp_crs
+      directives `
+        Include @coraza.conf-recommended
+        SecRuleEngine On
+      `
+    }
+
+    authorize with website_policy
+    reverse_proxy http://your-upstream-app:8080
+  }
+}
