@@ -1,0 +1,70 @@
+name: Build and publish Docker image
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: prod
+    env:
+      DOCKER_BUILDKIT: 1
+      IMAGE_REPOSITORY: eramosr19/caddy-with-plugins
+      BASE_TAG_FILE: .caddy-base-tag
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: vars
+        run: |
+          DATE_TAG=$(date +'%y.%m.%d')
+          GIT_SHA=$(git rev-parse --short HEAD)
+          DYNAMIC_TAG="${IMAGE_REPOSITORY}:${DATE_TAG}-${GIT_SHA}"
+
+          if [ ! -f "${BASE_TAG_FILE}" ]; then
+            echo "Base tag file not found: ${BASE_TAG_FILE}" >&2
+            exit 1
+          fi
+
+          CADDY_BASE_TAG=$(tr -d '[:space:]' < "${BASE_TAG_FILE}")
+          if [ -z "${CADDY_BASE_TAG}" ]; then
+            echo "Base tag file is empty: ${BASE_TAG_FILE}" >&2
+            exit 1
+          fi
+
+          {
+            echo "tags<<EOF"
+            echo "${DYNAMIC_TAG}"
+            if [ -n "${{ vars.DOCKER_IMAGE_TAGS }}" ]; then
+              echo "${{ vars.DOCKER_IMAGE_TAGS }}" | tr ',' '\n' | while read -r tag; do
+                CLEAN_TAG="$(echo "${tag}" | xargs)"
+                if [ -n "${CLEAN_TAG}" ]; then
+                  echo "${IMAGE_REPOSITORY}:${CLEAN_TAG}"
+                fi
+              done
+            fi
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+          echo "date_tag=${DATE_TAG}" >> "${GITHUB_OUTPUT}"
+          echo "git_sha=${GIT_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "caddy_base_tag=${CADDY_BASE_TAG}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          build-args: |
+            CADDY_BASE_TAG=${{ steps.vars.outputs.caddy_base_tag }}
+          tags: ${{ steps.vars.outputs.tags }}
